@@ -102,14 +102,15 @@ void A_input(struct pkt packet)
   //printf("Windows.size() == %d,Receive ACK:%d but could be false.\n",windows.size(),packet.seqnum);
   int ReceiveCheckSum = CalculateCheckSum(packet);
   if(ReceiveCheckSum == packet.checksum){
-    if(packet.seqnum == send_base){
-      send_base++;
+    if(packet.seqnum >= send_base){
+      send_base = packet.seqnum + 1;;
       //printf("%d:ack\n",send_base-1);
-      windows.erase(windows.begin());
+      while(!windows.empty() && windows[0].seqnum <= packet.seqnum)
+        windows.erase(windows.begin());
       //printf("stoptimer in A_input\n");
       stoptimer(0);
 
-      if(!wait_queue.empty()){
+      while(!wait_queue.empty() && windows.size() <= WindowSize){
         struct pkt p = wait_queue.front();
         wait_queue.pop();
         windows.push_back(p);
@@ -143,7 +144,7 @@ void A_init()
   WindowSize = getwinsize();
   send_base = 1;
   sequenceA = 1;
-  increment = 5.0;
+  increment = 100.0;
 }
 
 
@@ -152,6 +153,7 @@ void A_init()
 
 /* data used by B */
 int sequenceB;
+struct pkt buffer;
 
 /* make ack packet */
 pkt make_pkt_ack(pkt packet){
@@ -159,7 +161,7 @@ pkt make_pkt_ack(pkt packet){
   ack.seqnum = packet.seqnum;
   ack.acknum = 0;
   bzero(&ack.payload,sizeof(ack.payload));
-  //strcpy(ack.payload,"ack");
+  strcpy(ack.payload,"ack");
   ack.checksum = CalculateCheckSum(ack);
   return ack;
 }
@@ -174,16 +176,13 @@ void B_input(struct pkt packet)
       tolayer5(1,packet.payload);
       //printf("%d:receive %s\n",sequenceB,packet.payload);
       struct pkt ack = make_pkt_ack(packet);
+      buffer = make_pkt_ack(packet);
       tolayer3(1,ack);
 
       sequenceB++;
     }
-    else if(packet.seqnum < sequenceB) {
-      struct pkt ack = make_pkt_ack(packet);
-      tolayer3(1,ack);
-    }
-    else if(packet.seqnum > sequenceB){
-      /* drop! */
+    else {
+      tolayer3(1,buffer);
     }
   }
   else{
