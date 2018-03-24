@@ -1,4 +1,9 @@
 #include "../include/simulator.h"
+#include <stdio.h>
+#include <string.h>
+#include <queue>
+#include <vector>
+using namespace std;
 
 /* ******************************************************************
  ALTERNATING BIT AND GO-BACK-N NETWORK EMULATOR: VERSION 1.1  J.F.Kurose
@@ -18,6 +23,10 @@
 /* data used by A */
 int WindowSize;
 int send_base;
+int sequenceA;
+float increment;
+queue<pkt> wait_queue;
+vector<pkt> windows;
 
 /* calculate the checksum of the package  */
 int CalculateCheckSum(pkt packet){
@@ -50,19 +59,81 @@ pkt make_pkt(msg message,int sequence){
 /* called from layer 5, passed the data to be sent to other side */
 void A_output(struct msg message)
 {
-  
+  struct pkt packet = make_pkt(message,sequenceA);
+  sequenceA++;
+  if(windows.size() == 0) {
+    //printf("starttimer in A_output.\n");
+    starttimer(0,increment);
+    //printf("in this place.\n");
+  }
+  if(windows.size() < WindowSize){
+    if(wait_queue.empty()){
+      //printf("%d:send %s\n",packet.seqnum,packet.payload);
+      tolayer3(0,packet);
+      windows.push_back(packet);
+    }
+    else{
+      while(windows.size() < WindowSize && !wait_queue.empty()){
+        struct pkt p = wait_queue.front();
+        wait_queue.pop();
+        windows.push_back(p);
+        //printf("%d:send %s\n",p.seqnum,p.payload);
+        tolayer3(0,p);
+      }
+      if(windows.size() < WindowSize){
+        windows.push_back(packet);
+        //printf("%d:send %s\n",packet.seqnum,packet.payload);
+        tolayer3(0,packet);
+      }
+      else{
+        wait_queue.push(packet);
+      }
+    }
+  }
+  else{
+    //printf("buffer\n");
+    wait_queue.push(packet);
+  }
 }
 
 /* called from layer 3, when a packet arrives for layer 4 */
 void A_input(struct pkt packet)
 {
+  //printf("Windows.size() == %d,Receive ACK:%d but could be false.\n",windows.size(),packet.seqnum);
+  int ReceiveCheckSum = CalculateCheckSum(packet);
+  if(ReceiveCheckSum == packet.checksum){
+    if(packet.seqnum == send_base){
+      send_base++;
+      //printf("%d:ack\n",send_base-1);
+      windows.erase(windows.begin());
+      //printf("stoptimer in A_input\n");
+      stoptimer(0);
 
+      if(!wait_queue.empty()){
+        struct pkt p = wait_queue.front();
+        wait_queue.pop();
+        windows.push_back(p);
+        //printf("%d:send %s\n",p.seqnum,p.payload);
+        tolayer3(0,p);
+      }
+
+      if(windows.size() != 0){
+        //printf("starttimer in A_input\n");
+        starttimer(0,increment);
+        //printf("In this place\n");
+      }
+    }
+  }
 }
 
 /* called when A's timer goes off */
 void A_timerinterrupt()
 {
-
+  //printf("resend,windows[0]:%d\n",windows[0].seqnum);
+  starttimer(0,increment);
+  for(int i = 0;i != windows.size();++i){
+    tolayer3(0,windows[i]);
+  }
 }  
 
 /* the following routine will be called once (only) before any other */
@@ -71,6 +142,8 @@ void A_init()
 {
   WindowSize = getwinsize();
   send_base = 1;
+  sequenceA = 1;
+  increment = 5.0;
 }
 
 
@@ -78,6 +151,7 @@ void A_init()
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
 
 /* data used by B */
+int sequenceB;
 
 /* make ack packet */
 pkt make_pkt_ack(pkt packet){
@@ -85,7 +159,7 @@ pkt make_pkt_ack(pkt packet){
   ack.seqnum = packet.seqnum;
   ack.acknum = 0;
   bzero(&ack.payload,sizeof(ack.payload));
-  strcpy(ack.payload,"ack");
+  //strcpy(ack.payload,"ack");
   ack.checksum = CalculateCheckSum(ack);
   return ack;
 }
@@ -94,12 +168,32 @@ pkt make_pkt_ack(pkt packet){
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet)
 {
+  int ReceiveCheckSum = CalculateCheckSum(packet);
+  if(ReceiveCheckSum == packet.checksum){
+    if(packet.seqnum == sequenceB){
+      tolayer5(1,packet.payload);
+      //printf("%d:receive %s\n",sequenceB,packet.payload);
+      struct pkt ack = make_pkt_ack(packet);
+      tolayer3(1,ack);
 
+      sequenceB++;
+    }
+    else if(packet.seqnum < sequenceB) {
+      struct pkt ack = make_pkt_ack(packet);
+      tolayer3(1,ack);
+    }
+    else if(packet.seqnum > sequenceB){
+      /* drop! */
+    }
+  }
+  else{
+    /* No NACK! */
+  }
 }
 
 /* the following rouytine will be called once (only) before any other */
 /* entity B routines are called. You can use it to do any initialization */
 void B_init()
 {
-
+  sequenceB = 1;
 }

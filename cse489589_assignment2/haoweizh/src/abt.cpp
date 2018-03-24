@@ -126,7 +126,7 @@ void A_timerinterrupt()
 /* entity A routines are called. You can use it to do any initialization */
 void A_init()
 {
-  increment = 2.0;
+  increment = 5.0;
   sequenceA = 1;
   CanSend = true;
 }
