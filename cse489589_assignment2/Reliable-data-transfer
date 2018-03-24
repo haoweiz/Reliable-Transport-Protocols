@@ -1,0 +1,8 @@
+./abt -s 1 -w 1 -m 200 -l 0.8 -c 0.8 -t 10000 -v 0
+
+./gbn -s 1 -w 1 -m 5 -l 0.0 -c 0.0 -t 1000 -v 0
+
+
+in src folder
+
+scp * haoweizh@timberlake.cse.buffalo.edu://home/csgrad/haoweizh/cse489589_assignment2/haoweizh/src
