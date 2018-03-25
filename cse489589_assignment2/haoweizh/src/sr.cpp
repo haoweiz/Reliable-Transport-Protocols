@@ -23,12 +23,12 @@ using namespace std;
 /* called from layer 5, passed the data to be sent to other side */
 
 /* data used by A */
-int WindowSize;
-int send_base;
+int A_WindowSize;
+int A_send_base;
 int sequenceA;
 float increment;
 queue<pkt> wait_queue;
-vector<pkt> windows;
+vector<pkt> A_windows;
 
 /* calculate the checksum of the package  */
 int CalculateCheckSum(pkt packet){
@@ -62,27 +62,27 @@ void A_output(struct msg message)
 {
   struct pkt packet = make_pkt(message,sequenceA);
   sequenceA++;
-  if(windows.size() == 0) {
+  if(A_windows.size() == 0) {
     ////printf("starttimer in A_output.\n");
     starttimer(0,increment);
     //printf("in this place.\n");
   }
-  if(windows.size() < WindowSize){
+  if(A_windows.size() < A_WindowSize){
     if(wait_queue.empty()){
       //printf("%d:send %s\n",packet.seqnum,packet.payload);
       tolayer3(0,packet);
-      windows.push_back(packet);
+      A_windows.push_back(packet);
     }
     else{
-      while(windows.size() < WindowSize && !wait_queue.empty()){
+      while(A_windows.size() < A_WindowSize && !wait_queue.empty()){
         struct pkt p = wait_queue.front();
         wait_queue.pop();
-        windows.push_back(p);
+        A_windows.push_back(p);
         //printf("%d:send %s\n",p.seqnum,p.payload);
         tolayer3(0,p);
       }
-      if(windows.size() < WindowSize){
-        windows.push_back(packet);
+      if(A_windows.size() < A_WindowSize){
+        A_windows.push_back(packet);
         //printf("%d:send %s\n",packet.seqnum,packet.payload);
         tolayer3(0,packet);
       }
@@ -100,40 +100,43 @@ void A_output(struct msg message)
 /* called from layer 3, when a packet arrives for layer 4 */
 void A_input(struct pkt packet)
 {
-  //printf("Windows.size() == %d,Receive ACK:%d but could be false.\n",windows.size(),packet.seqnum);
+  //printf("Windows.size() == %d,Receive ACK:%d but could be false.\n",A_windows.size(),packet.seqnum);
   int ReceiveCheckSum = CalculateCheckSum(packet);
   if(ReceiveCheckSum == packet.checksum){
-    if(packet.seqnum == send_base){
-      send_base++;
-      //printf("%d:ack\n",send_base-1);
-      windows.erase(windows.begin());
-      //printf("stoptimer in A_input\n");
-      stoptimer(0);
+    //printf("%d:ack\n",packet.seqnum);
+    if(packet.seqnum == A_send_base){
+      A_windows[0].acknum = 1;
+      while(!A_windows.empty() && A_windows[0].acknum == 1){
+        A_windows.erase(A_windows.begin());
+        A_send_base++;
+      }
 
-      if(!wait_queue.empty()){
+      while(!wait_queue.empty() && A_windows.size() <= A_WindowSize){
         struct pkt p = wait_queue.front();
         wait_queue.pop();
-        windows.push_back(p);
+        A_windows.push_back(p);
         //printf("%d:send %s\n",p.seqnum,p.payload);
         tolayer3(0,p);
       }
-
-      if(windows.size() != 0){
-        //printf("starttimer in A_input\n");
-        starttimer(0,increment);
-        //printf("In this place\n");
-      }
     }
+    else if(packet.seqnum > A_send_base){
+      A_windows[packet.seqnum - A_send_base].acknum = 1;
+    }
+
+    stoptimer(0);
+    if(A_windows.size() != 0)
+      starttimer(0,increment);
   }
 }
 
 /* called when A's timer goes off */
 void A_timerinterrupt()
 {
-  //printf("resend,windows[0]:%d\n",windows[0].seqnum);
+  //printf("resend,A_windows[0]:%d\n",A_windows[0].seqnum);
   starttimer(0,increment);
-  for(int i = 0;i != windows.size();++i){
-    tolayer3(0,windows[i]);
+  for(int i = 0;i != A_windows.size();++i){
+    if(A_windows[i].acknum == 0)
+      tolayer3(0,A_windows[i]);
   }
 }  
 
@@ -141,8 +144,8 @@ void A_timerinterrupt()
 /* entity A routines are called. You can use it to do any initialization */
 void A_init()
 {
-  WindowSize = getwinsize();
-  send_base = 1;
+  A_WindowSize = getwinsize();
+  A_send_base = 1;
   sequenceA = 1;
   increment = 100.0;
 }
@@ -150,7 +153,10 @@ void A_init()
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
 
 /* data used by B */
-int sequenceB;
+int B_WindowSize;
+int B_receive_base;
+vector<pkt> B_windows;
+
 
 /* make ack packet */
 pkt make_pkt_ack(pkt packet){
@@ -158,11 +164,10 @@ pkt make_pkt_ack(pkt packet){
   ack.seqnum = packet.seqnum;
   ack.acknum = 0;
   bzero(&ack.payload,sizeof(ack.payload));
-  //strcpy(ack.payload,"ack");
+  strcpy(ack.payload,"ack");
   ack.checksum = CalculateCheckSum(ack);
   return ack;
 }
-
 
 
 /* called from layer 3, when a packet arrives for layer 4 at B*/
@@ -170,20 +175,23 @@ void B_input(struct pkt packet)
 {
   int ReceiveCheckSum = CalculateCheckSum(packet);
   if(ReceiveCheckSum == packet.checksum){
-    if(packet.seqnum == sequenceB){
-      tolayer5(1,packet.payload);
-      //printf("%d:receive %s\n",sequenceB,packet.payload);
-      struct pkt ack = make_pkt_ack(packet);
-      tolayer3(1,ack);
-
-      sequenceB++;
+    //printf("%d:receive %s\n",packet.seqnum,packet.payload);
+    struct pkt ack = make_pkt_ack(packet);
+    tolayer3(1,ack);
+    if(packet.seqnum == B_receive_base){
+      packet.acknum = 1;
+      B_windows[0] = packet;
+      while(!B_windows.empty() && B_windows[0].acknum == 1){
+        tolayer5(1,B_windows[0].payload);
+        B_windows.erase(B_windows.begin());
+        struct pkt p;
+        B_windows.push_back(p);
+        B_receive_base++;
+      }
     }
-    else if(packet.seqnum < sequenceB) {
-      struct pkt ack = make_pkt_ack(packet);
-      tolayer3(1,ack);
-    }
-    else if(packet.seqnum > sequenceB){
-      /* drop! */
+    else if(packet.seqnum > B_receive_base && packet.seqnum < B_receive_base + B_WindowSize){
+      packet.acknum = 1;
+      B_windows[packet.seqnum - B_receive_base] = packet;
     }
   }
   else{
@@ -195,5 +203,10 @@ void B_input(struct pkt packet)
 /* entity B routines are called. You can use it to do any initialization */
 void B_init()
 {
-  sequenceB = 1;
+  B_WindowSize = getwinsize();
+  B_receive_base = 1;
+  for(int i = 0;i != B_WindowSize;++i){
+    struct pkt p;
+    B_windows.push_back(p);
+  }
 }
