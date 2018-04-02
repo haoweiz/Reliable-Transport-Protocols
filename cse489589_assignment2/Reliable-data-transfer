@@ -5,4 +5,10 @@
 
 in src folder
 
+./advanced_tests -p ../haoweizh/sr -r ./run_experiments
+
+
+ssh haoweizh@timberlake.cse.buffalo.edu
+
+
 scp * haoweizh@timberlake.cse.buffalo.edu://home/csgrad/haoweizh/cse489589_assignment2/haoweizh/src

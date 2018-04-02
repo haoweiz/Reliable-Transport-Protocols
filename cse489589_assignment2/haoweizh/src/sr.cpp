@@ -1,5 +1,6 @@
 #include "../include/simulator.h"
 #include <stdio.h>
+#include <limits.h>
 #include <string.h>
 #include <queue>
 #include <vector>
@@ -23,12 +24,21 @@ using namespace std;
 /* called from layer 5, passed the data to be sent to other side */
 
 /* data used by A */
+struct pkt_with_begin_time{
+  pkt_with_begin_time(struct pkt pack,float start):packet(pack),start_time(start){}
+  struct pkt packet;
+  float start_time;
+};
+
+
 int A_WindowSize;
 int A_send_base;
 int sequenceA;
 float increment;
+int largest_confirm_num;
 queue<pkt> wait_queue;
-vector<pkt> A_windows;
+vector<pkt_with_begin_time> A_windows;
+
 
 /* calculate the checksum of the package  */
 int CalculateCheckSum(pkt packet){
@@ -61,28 +71,30 @@ pkt make_pkt(msg message,int sequence){
 void A_output(struct msg message)
 {
   struct pkt packet = make_pkt(message,sequenceA);
-  sequenceA++;
+  float start_time = get_sim_time();
   if(A_windows.size() == 0) {
-    ////printf("starttimer in A_output.\n");
+    //printf("starttimer in A_output.\n");
     starttimer(0,increment);
-    //printf("in this place.\n");
   }
-  if(A_windows.size() < A_WindowSize){
+  if(sequenceA - A_send_base < A_WindowSize){
     if(wait_queue.empty()){
       //printf("%d:send %s\n",packet.seqnum,packet.payload);
       tolayer3(0,packet);
-      A_windows.push_back(packet);
+      pkt_with_begin_time pwbt(packet,start_time);
+      A_windows.push_back(pwbt);
     }
     else{
-      while(A_windows.size() < A_WindowSize && !wait_queue.empty()){
+      while(!wait_queue.empty() && wait_queue.front().seqnum - A_send_base < A_WindowSize){
         struct pkt p = wait_queue.front();
         wait_queue.pop();
-        A_windows.push_back(p);
+        pkt_with_begin_time pwbt(p,start_time);
+        A_windows.push_back(pwbt);
         //printf("%d:send %s\n",p.seqnum,p.payload);
         tolayer3(0,p);
       }
-      if(A_windows.size() < A_WindowSize){
-        A_windows.push_back(packet);
+      if(sequenceA - A_send_base < A_WindowSize){
+        pkt_with_begin_time pwbt(packet,start_time);
+        A_windows.push_back(pwbt);
         //printf("%d:send %s\n",packet.seqnum,packet.payload);
         tolayer3(0,packet);
       }
@@ -92,9 +104,10 @@ void A_output(struct msg message)
     }
   }
   else{
-    //printf("buffer\n");
+    //printf("buffer: %d\n",packet.seqnum);
     wait_queue.push(packet);
   }
+  sequenceA++;
 }
 
 /* called from layer 3, when a packet arrives for layer 4 */
@@ -103,41 +116,65 @@ void A_input(struct pkt packet)
   //printf("Windows.size() == %d,Receive ACK:%d but could be false.\n",A_windows.size(),packet.seqnum);
   int ReceiveCheckSum = CalculateCheckSum(packet);
   if(ReceiveCheckSum == packet.checksum){
-    //printf("%d:ack\n",packet.seqnum);
+    /* Remove correspond packet from A_Windows */
+    for(vector<pkt_with_begin_time>::iterator iter = A_windows.begin();iter != A_windows.end();++iter){
+      if(iter->packet.seqnum == packet.seqnum){
+        A_windows.erase(iter);
+        break;
+      }
+    }
+    largest_confirm_num = max(largest_confirm_num,packet.seqnum);
+    //printf("%d:ack,A_send_base:%d\n",packet.seqnum,A_send_base);
+    /* If packet.seqnum equals to A_send_base, update A_send_base and send buffer packet */
     if(packet.seqnum == A_send_base){
-      A_windows[0].acknum = 1;
-      while(!A_windows.empty() && A_windows[0].acknum == 1){
-        A_windows.erase(A_windows.begin());
-        A_send_base++;
+      stoptimer(0);
+      float now = get_sim_time();
+      int smallest = INT_MAX;
+      int greatest = 0;
+      if(A_windows.size() == 0){
+        A_send_base = largest_confirm_num + 1;
+        greatest = largest_confirm_num;
+      }
+      else{
+        for(vector<pkt_with_begin_time>::iterator iter = A_windows.begin();iter != A_windows.end();++iter){
+          smallest = min(smallest,iter->packet.seqnum);
+          greatest = max(greatest,iter->packet.seqnum);
+        }
+        A_send_base = smallest;
+        starttimer(0,increment - (now - A_windows[0].start_time));
       }
 
-      while(!wait_queue.empty() && A_windows.size() <= A_WindowSize){
+      while(!wait_queue.empty() && greatest - A_send_base + 1 < A_WindowSize){
+        //printf("greatest:%d,A_send_base:%d,A_WindowSize:%d\n",greatest,A_send_base,A_windows.size());
+        if(A_windows.size() == 0)
+          starttimer(0,increment);
         struct pkt p = wait_queue.front();
         wait_queue.pop();
-        A_windows.push_back(p);
+        float start_time = get_sim_time();
+        pkt_with_begin_time pwbt(p,start_time);
+        A_windows.push_back(pwbt);
         //printf("%d:send %s\n",p.seqnum,p.payload);
         tolayer3(0,p);
+        greatest = p.seqnum;
       }
     }
-    else if(packet.seqnum > A_send_base){
-      A_windows[packet.seqnum - A_send_base].acknum = 1;
-    }
-
-    stoptimer(0);
-    if(A_windows.size() != 0)
-      starttimer(0,increment);
   }
 }
 
 /* called when A's timer goes off */
 void A_timerinterrupt()
 {
-  //printf("resend,A_windows[0]:%d\n",A_windows[0].seqnum);
-  starttimer(0,increment);
-  for(int i = 0;i != A_windows.size();++i){
-    if(A_windows[i].acknum == 0)
-      tolayer3(0,A_windows[i]);
-  }
+  //printf("resend,A_windows[0]:%d\n",A_windows[0].packet.seqnum);
+
+  pkt_with_begin_time head = A_windows[0];
+  head.start_time = get_sim_time();
+  A_windows.push_back(head);
+  A_windows.erase(A_windows.begin());
+  tolayer3(0,head.packet);
+
+  float now = get_sim_time();
+  starttimer(0,increment - (now - A_windows[0].start_time));
+  //printf("new start_time:%f\n",increment - (now - A_windows[0].start_time));
 }  
 
 /* the following routine will be called once (only) before any other */
@@ -145,6 +182,7 @@ void A_timerinterrupt()
 void A_init()
 {
   A_WindowSize = getwinsize();
+  largest_confirm_num = 0;
   A_send_base = 1;
   sequenceA = 1;
   increment = 100.0;
@@ -175,19 +213,21 @@ void B_input(struct pkt packet)
 {
   int ReceiveCheckSum = CalculateCheckSum(packet);
   if(ReceiveCheckSum == packet.checksum){
-    //printf("%d:receive %s\n",packet.seqnum,packet.payload);
+    //printf("%d:receive %s,B_receive_base:%d\n",packet.seqnum,packet.payload,B_receive_base);
     struct pkt ack = make_pkt_ack(packet);
     tolayer3(1,ack);
     if(packet.seqnum == B_receive_base){
       packet.acknum = 1;
       B_windows[0] = packet;
       while(!B_windows.empty() && B_windows[0].acknum == 1){
+        //printf("*****************%d:tolayer5.**************************************\n",B_windows[0].seqnum);
         tolayer5(1,B_windows[0].payload);
         B_windows.erase(B_windows.begin());
         struct pkt p;
         B_windows.push_back(p);
         B_receive_base++;
       }
+      //printf("B_receive_base:%d\n",B_receive_base);
     }
     else if(packet.seqnum > B_receive_base && packet.seqnum < B_receive_base + B_WindowSize){
       packet.acknum = 1;
