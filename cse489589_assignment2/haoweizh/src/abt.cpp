@@ -21,6 +21,9 @@ using namespace std;
 
 /* data used by A */
 float increment;
+float start_timer_time;
+float EstimateRTT;
+float DevRTT;
 int sequenceA;
 bool CanSend;        // whether ready to send new data
 struct msg buffer;
@@ -62,22 +65,13 @@ void A_output(struct msg message)
       struct pkt packet = make_pkt(message,sequenceA);
       tolayer3(0, packet); 
       starttimer(0, increment);
+      start_timer_time = get_sim_time();
 
       /* buffer packet in order to retransmit */
       bzero(&buffer,sizeof(buffer));
       strncpy(buffer.data,message.data,sizeof(message.data));
 
       //printf("%d:A send:%s\n",packet.seqnum,packet.payload);
-    }
-    else{
-      struct pkt packet = wait_queue.front();
-      wait_queue.pop();
-      tolayer3(0,packet);
-      CanSend = false;
-      starttimer(0, increment);
-
-      bzero(&buffer,sizeof(buffer));
-      strncpy(buffer.data,packet.payload,sizeof(packet.payload));
     }
   }
   else{
@@ -97,6 +91,12 @@ void A_input(struct pkt packet)
       //printf("%d:ack\n",packet.seqnum);
       sequenceA++;
       stoptimer(0);
+      float SampleRTT = get_sim_time() - start_timer_time;
+      EstimateRTT = 0.875 * EstimateRTT + 0.125 * SampleRTT;
+      float dev = (EstimateRTT - SampleRTT > 0) ? (EstimateRTT - SampleRTT) : (SampleRTT - EstimateRTT);
+      DevRTT = 0.75 * DevRTT + 0.25 * dev;
+      increment = EstimateRTT + 4 * DevRTT;
+      //printf("increment = %f\n",increment);
       CanSend = true;
     }
   }
@@ -107,6 +107,7 @@ void A_input(struct pkt packet)
     tolayer3(0,packet);
     CanSend = false;
     starttimer(0, increment);
+    start_timer_time = get_sim_time();
 
     bzero(&buffer,sizeof(buffer));
     strncpy(buffer.data,packet.payload,sizeof(packet.payload));
@@ -116,19 +117,23 @@ void A_input(struct pkt packet)
 /* called when A's timer goes off */
 void A_timerinterrupt()
 {
-  //printf("resend:%s\n",buffer.data);
+  //printf("*******************************resend:%s\n",buffer.data);
   struct pkt packet = make_pkt(buffer,sequenceA);
   tolayer3(0, packet); 
   starttimer(0, increment);
+  start_timer_time = get_sim_time();
 }  
 
 /* the following routine will be called once (only) before any other */
 /* entity A routines are called. You can use it to do any initialization */
 void A_init()
 {
-  increment = 100.0;
+  increment = 20.0;
   sequenceA = 1;
   CanSend = true;
+  start_timer_time = 0.0;
+  DevRTT = 0.0;
+  EstimateRTT = 20.0;
 }
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */

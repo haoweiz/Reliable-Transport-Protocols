@@ -25,6 +25,9 @@ int WindowSize;
 int send_base;
 int sequenceA;
 float increment;
+float start_timer_time;
+float EstimateRTT;
+float DevRTT;
 queue<pkt> wait_queue;
 vector<pkt> windows;
 
@@ -64,6 +67,7 @@ void A_output(struct msg message)
   if(windows.size() == 0) {
     //printf("starttimer in A_output.\n");
     starttimer(0,increment);
+    start_timer_time = get_sim_time();
     //printf("in this place.\n");
   }
   if(windows.size() < WindowSize){
@@ -109,6 +113,12 @@ void A_input(struct pkt packet)
         windows.erase(windows.begin());
       //printf("stoptimer in A_input\n");
       stoptimer(0);
+      float SampleRTT = get_sim_time() - start_timer_time;
+      EstimateRTT = 0.875 * EstimateRTT + 0.125 * SampleRTT;
+      float dev = (EstimateRTT - SampleRTT > 0) ? (EstimateRTT - SampleRTT) : (SampleRTT - EstimateRTT);
+      DevRTT = 0.75 * DevRTT + 0.25 * dev;
+      increment = EstimateRTT + 4 * DevRTT;
+      //printf("increment = %f\n",increment);
 
       while(!wait_queue.empty() && windows.size() <= WindowSize){
         struct pkt p = wait_queue.front();
@@ -121,6 +131,7 @@ void A_input(struct pkt packet)
       if(windows.size() != 0){
         //printf("starttimer in A_input\n");
         starttimer(0,increment);
+        start_timer_time = get_sim_time();
         //printf("In this place\n");
       }
     }
@@ -130,8 +141,9 @@ void A_input(struct pkt packet)
 /* called when A's timer goes off */
 void A_timerinterrupt()
 {
-  //printf("resend,windows[0]:%d\n",windows[0].seqnum);
+  //printf("*********************resend,windows[0]:%d\n",windows[0].seqnum);
   starttimer(0,increment);
+  start_timer_time = get_sim_time();
   for(int i = 0;i != windows.size();++i){
     tolayer3(0,windows[i]);
   }
@@ -144,7 +156,10 @@ void A_init()
   WindowSize = getwinsize();
   send_base = 1;
   sequenceA = 1;
-  increment = 100.0;
+  increment = 20.0;
+  start_timer_time = 0.0;
+  DevRTT = 0.0;
+  EstimateRTT = 20.0;
 }
 
 

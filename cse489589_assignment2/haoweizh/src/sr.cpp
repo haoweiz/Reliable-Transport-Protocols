@@ -35,6 +35,8 @@ int A_WindowSize;
 int A_send_base;
 int sequenceA;
 float increment;
+float EstimateRTT;
+float DevRTT;
 int largest_confirm_num;
 queue<pkt> wait_queue;
 vector<pkt_with_begin_time> A_windows;
@@ -119,6 +121,13 @@ void A_input(struct pkt packet)
     /* Remove correspond packet from A_Windows */
     for(vector<pkt_with_begin_time>::iterator iter = A_windows.begin();iter != A_windows.end();++iter){
       if(iter->packet.seqnum == packet.seqnum){
+        float SampleRTT = get_sim_time() - iter->start_time;
+        EstimateRTT = 0.875 * EstimateRTT + 0.125 * SampleRTT;
+        float dev = (EstimateRTT - SampleRTT > 0) ? (EstimateRTT - SampleRTT) : (SampleRTT - EstimateRTT);
+        DevRTT = 0.75 * DevRTT + 0.25 * dev;
+        increment = EstimateRTT + 4 * DevRTT;
+        //printf("increment = %f\n",increment);
+
         A_windows.erase(iter);
         break;
       }
@@ -128,6 +137,7 @@ void A_input(struct pkt packet)
     /* If packet.seqnum equals to A_send_base, update A_send_base and send buffer packet */
     if(packet.seqnum == A_send_base){
       stoptimer(0);
+
       float now = get_sim_time();
       int smallest = INT_MAX;
       int greatest = 0;
@@ -141,13 +151,14 @@ void A_input(struct pkt packet)
           greatest = max(greatest,iter->packet.seqnum);
         }
         A_send_base = smallest;
-        starttimer(0,increment - (now - A_windows[0].start_time));
+        starttimer(0,increment - (now - A_windows[0].start_time)); 
       }
 
       while(!wait_queue.empty() && greatest - A_send_base + 1 < A_WindowSize){
         //printf("greatest:%d,A_send_base:%d,A_WindowSize:%d\n",greatest,A_send_base,A_windows.size());
-        if(A_windows.size() == 0)
+        if(A_windows.size() == 0){
           starttimer(0,increment);
+        }
         struct pkt p = wait_queue.front();
         wait_queue.pop();
         float start_time = get_sim_time();
@@ -185,7 +196,9 @@ void A_init()
   largest_confirm_num = 0;
   A_send_base = 1;
   sequenceA = 1;
-  increment = 100.0;
+  increment = 20.0;
+  DevRTT = 0.0;
+  EstimateRTT = 20.0;
 }
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
